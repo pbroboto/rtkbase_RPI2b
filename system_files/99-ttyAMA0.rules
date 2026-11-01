@@ -1,0 +1,1 @@
+KERNEL=="ttyAMA0", GROUP="tty", MODE="0660", RUN+="/usr/bin/setfacl -m g:tty:rw,m::rw /dev/ttyAMA0"

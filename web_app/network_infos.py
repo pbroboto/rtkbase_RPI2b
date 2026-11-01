@@ -1,0 +1,337 @@
+#!/usr/bin/python
+""" Module to get up network interfaces with their ip address and connection name
+    These informations are then displayed inside the RTKBase web GUI.
+"""
+
+import logging
+import psutil
+import nmcli
+import argparse
+
+logging.basicConfig(format='%(levelname)s: %(message)s')
+log = logging.getLogger(__name__)
+log.setLevel('ERROR')
+
+nmcli.disable_use_sudo()
+
+
+def get_conn_name(device):
+    """
+        Get the connection name for the device 
+        (e.g. Wired Connection 1)
+        
+        Parameter:
+            device(str): the network device name
+        Return:
+            str: connection name
+    """
+    try:
+        device_infos = nmcli.device.show(device)
+        return device_infos["GENERAL.CONNECTION"]
+    except nmcli.NotExistException:
+        log.debug("No connection name for {}".format(device))
+        return None
+
+def get_up_if():
+    """
+        Get the up network interface
+
+        Return:
+            list: up interfaces
+    """
+    #filtering available interface
+    if_stats = psutil.net_if_stats()
+    if_stats.pop('lo')
+    log.debug(if_stats)
+    if_stats = {k:v for (k,v) in if_stats.items() if if_stats[k].isup} # keep only up interface
+    if_stats = {k:v for (k,v) in if_stats.items() if if_stats[k].speed > 0 or 'pointopoint' in if_stats[k].flags} # keep only interface with speed > 0
+    if_stats = {k:v for (k,v) in if_stats.items() if not k.startswith('docker')} # remove docker interface
+    return if_stats
+
+def get_interfaces_infos():
+    """
+        Get all up network interfaces with their ip v4/v6 addresses
+        the connection name and its mac address.
+        It returns a list of dict
+        e.g. [{'device': 'end0', 'ipv4': ['192.168.1.135'], 'ipv6': [], 'conn_name': 'Wired connection 1'}, 'hwaddr': '02:81:4E:7C:37:4F']
+
+        Return:
+            list: all up network interfaces as dict
+    """
+    up_interface = get_up_if()
+    log.debug("up interfaces: {}".format(up_interface))
+    #then filter psutil.net_if_addrs()
+    if_addrs = psutil.net_if_addrs()
+    up_interface = {k:if_addrs[k] for (k,v) in up_interface.items() if if_addrs.get(k)}
+    #then filter to keep only AF_INET and AF_INET6
+    for k,v in up_interface.items():
+        up_interface[k] = [ x for x in v if x.family.name == 'AF_INET' or x.family.name == 'AF_INET6']
+    #then filter ipv6 link local address
+    for k,v in up_interface.items():
+        up_interface[k] = [ x for x in v if not x.address.startswith('fe80')]
+
+    interfaces_infos = []
+    for k,v in up_interface.items():
+        device_info = {"device" : k}
+        ipv4 = []
+        ipv6 = []
+        for part in v:
+            if part.family.name == 'AF_INET6':
+                ipv6.append(part.address)
+            elif part.family.name == 'AF_INET':
+                ipv4.append(part.address)
+            log.debug("{} : {} : {}".format(k, part.family.name, part.address))
+        device_info["ipv4"] = ipv4 if len(ipv4) > 0 else None
+        device_info["ipv6"] = ipv6 if len(ipv6) > 0 else None
+        conn_name = get_conn_name(k)
+        if conn_name:
+            device_info["conn_name"] = conn_name
+        device_info["hwaddr"] = nmcli.device.show(k).get('GENERAL.HWADDR')
+        interfaces_infos.append(device_info)
+    return interfaces_infos
+
+def arg_parse():
+    """ Parse the command line you use to launch the script """
+    
+    parser= argparse.ArgumentParser(prog='network_infos', description="Module to get up network interfaces with their ip address and connection name")
+    parser = argparse.ArgumentParser(formatter_class=argparse.RawTextHelpFormatter)
+    parser.add_argument("-d", "--debug", action='store_true')
+    args = parser.parse_args()
+    return args
+
+import subprocess
+import yaml
+import re
+import time
+
+def scan_wifi():
+    """
+    Scan for available WiFi networks
+    Returns:
+        list: List of dicts with SSID, signal strength, security
+    """
+    try:
+        # Get the AP SSID from hostapd config to filter it out
+        ap_ssid = None
+        try:
+            with open('/etc/hostapd/hostapd_ap.conf', 'r') as f:
+                for line in f:
+                    if line.startswith('ssid='):
+                        ap_ssid = line.split('=', 1)[1].strip()
+                        break
+        except FileNotFoundError:
+            log.debug("hostapd_ap.conf not found, no AP SSID to filter")
+        
+        # Trigger scan
+        subprocess.run(['sudo', 'iw', 'dev', 'wlan_client', 'scan', 'trigger'], 
+                      capture_output=True, timeout=5)
+        # Wait for scan to complete
+        time.sleep(2)
+        
+        # Get scan results
+        result = subprocess.run(['sudo', 'iw', 'dev', 'wlan_client', 'scan'], 
+                               capture_output=True, text=True, timeout=10)
+        
+        networks = []
+        current_network = {}
+        
+        for line in result.stdout.split('\n'):
+            line = line.strip()
+            
+            if line.startswith('BSS '):
+                # New network found, save previous
+                if current_network.get('ssid'):
+                    networks.append(current_network)
+                current_network = {}
+                
+            elif line.startswith('SSID:'):
+                ssid = line.split('SSID: ')[1].strip() if 'SSID: ' in line else ''
+                if ssid:  # Ignore hidden SSIDs
+                    current_network['ssid'] = ssid
+                    
+            elif line.startswith('signal:'):
+                # Extract signal strength in dBm
+                signal = line.split('signal: ')[1].split(' ')[0]
+                current_network['signal'] = signal
+                
+            elif 'WPA' in line or 'RSN' in line:
+                current_network['security'] = 'WPA'
+            elif 'WEP' in line:
+                current_network['security'] = 'WEP'
+                
+        # Add last network
+        if current_network.get('ssid'):
+            networks.append(current_network)
+            
+        # Remove duplicates (same SSID, keep strongest signal)
+        unique_networks = {}
+        for net in networks:
+            ssid = net['ssid']
+            # Filter out our own AP SSID
+            if ap_ssid and ssid == ap_ssid:
+                log.debug(f"Filtering out own AP SSID: {ap_ssid}")
+                continue
+                
+            if ssid not in unique_networks:
+                unique_networks[ssid] = net
+                # Set security to Open if not set
+                if 'security' not in unique_networks[ssid]:
+                    unique_networks[ssid]['security'] = 'Open'
+            else:
+                # Keep the one with stronger signal
+                old_signal = float(unique_networks[ssid].get('signal', -100))
+                new_signal = float(net.get('signal', -100))
+                if new_signal > old_signal:
+                    unique_networks[ssid] = net
+                    
+        return sorted(list(unique_networks.values()), 
+                     key=lambda x: float(x.get('signal', -100)), 
+                     reverse=True)
+        
+    except Exception as e:
+        log.error(f"WiFi scan failed: {e}")
+        return []
+
+def get_wifi_status():
+    """
+    Get current WiFi connection status
+    Returns:
+        dict: SSID, state, IP address
+    """
+    try:
+        # Get wpa_supplicant status
+        result = subprocess.run(['wpa_cli', '-i', 'wlan_client', 'status'], 
+                               capture_output=True, text=True, timeout=5)
+        
+        status = {}
+        for line in result.stdout.split('\n'):
+            if '=' in line:
+                key, value = line.split('=', 1)
+                status[key] = value.strip()
+                
+        # Get IP address
+        ip_result = subprocess.run(['ip', '-4', 'addr', 'show', 'wlan_client'], 
+                                  capture_output=True, text=True)
+        ip_match = re.search(r'inet (\d+\.\d+\.\d+\.\d+)', ip_result.stdout)
+        
+        return {
+            'ssid': status.get('ssid', ''),
+            'state': status.get('wpa_state', 'DISCONNECTED'),
+            'ip': ip_match.group(1) if ip_match else None,
+            'connected': status.get('wpa_state') == 'COMPLETED'
+        }
+        
+    except Exception as e:
+        log.error(f"Get WiFi status failed: {e}")
+        return {'ssid': '', 'state': 'ERROR', 'ip': None, 'connected': False}
+
+def connect_wifi(ssid, password):
+    """
+    Connect to WiFi network by updating netplan config
+    
+    Parameters:
+        ssid (str): WiFi network name
+        password (str): WiFi password (empty for open networks)
+        
+    Returns:
+        dict: {'success': bool, 'message': str}
+    """
+    try:
+        netplan_file = '/etc/netplan/armbian.yaml'
+        
+        # Read current config
+        with open(netplan_file, 'r') as f:
+            config = yaml.safe_load(f)
+            
+        # Ensure structure exists
+        if 'network' not in config:
+            config['network'] = {}
+        if 'wifis' not in config['network']:
+            config['network']['wifis'] = {}
+        if 'wlan_client' not in config['network']['wifis']:
+            config['network']['wifis']['wlan_client'] = {
+                'dhcp4': True,
+                'dhcp6': True,
+                'access-points': {}
+            }
+        # Clear old access points and add ONLY the new one
+        config['network']['wifis']['wlan_client']['access-points'] = {}          
+          
+        # Add new WiFi network
+        if password:
+            # Secured network
+            config['network']['wifis']['wlan_client']['access-points'][ssid] = {
+                'auth': {
+                    'key-management': 'psk',
+                    'password': password
+                }
+            }
+        else:
+            # Open network
+            config['network']['wifis']['wlan_client']['access-points'][ssid] = {}
+        
+        # Write config
+        with open(netplan_file, 'w') as f:
+            yaml.dump(config, f, default_flow_style=False, sort_keys=False)
+            
+        # Apply netplan
+        result = subprocess.run(['sudo', 'netplan', 'apply'], 
+                               capture_output=True, text=True, timeout=30)
+        
+        if result.returncode == 0:
+            return {'success': True, 'message': f'Connecting to {ssid}...'}
+        else:
+            return {'success': False, 'message': f'Failed: {result.stderr}'}
+            
+    except Exception as e:
+        log.error(f"Connect WiFi failed: {e}")
+        return {'success': False, 'message': str(e)}
+
+def disconnect_wifi(ssid=None):
+    """
+    Disconnect from WiFi by removing access point from netplan
+    
+    Parameters:
+        ssid (str): Specific SSID to remove, or None to remove all
+        
+    Returns:
+        dict: {'success': bool, 'message': str}
+    """
+    try:
+        netplan_file = '/etc/netplan/armbian.yaml'
+        
+        # Read current config
+        with open(netplan_file, 'r') as f:
+            config = yaml.safe_load(f)
+            
+        # Remove access points
+        if 'network' in config and 'wifis' in config['network']:
+            if 'wlan_client' in config['network']['wifis']:
+                if ssid:
+                    # Remove specific network
+                    if ssid in config['network']['wifis']['wlan_client']['access-points']:
+                        del config['network']['wifis']['wlan_client']['access-points'][ssid]
+                else:
+                    # Remove all networks
+                    config['network']['wifis']['wlan_client']['access-points'] = {}
+                
+        # Write config
+        with open(netplan_file, 'w') as f:
+            yaml.dump(config, f, default_flow_style=False, sort_keys=False)
+            
+        # Apply netplan
+        subprocess.run(['sudo', 'netplan', 'apply'], 
+                      capture_output=True, timeout=30)
+        
+        msg = f'Disconnected from {ssid}' if ssid else 'Disconnected from WiFi'
+        return {'success': True, 'message': msg}
+        
+    except Exception as e:
+        log.error(f"Disconnect WiFi failed: {e}")
+        return {'success': False, 'message': str(e)}
+
+if __name__ == "__main__":
+    args = arg_parse()
+    if args.debug:
+        log.setLevel('DEBUG')
+    print(get_interfaces_infos())

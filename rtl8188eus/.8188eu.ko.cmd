@@ -1,0 +1,1 @@
+savedcmd_/home/rtkbase/rtkbase/rtl8188eus/8188eu.ko := arm-linux-gnueabihf-ld -r -EL -z noexecstack --no-warn-rwx-segments --build-id=sha1  -T arch/arm/module.lds -o /home/rtkbase/rtkbase/rtl8188eus/8188eu.ko /home/rtkbase/rtkbase/rtl8188eus/8188eu.o /home/rtkbase/rtkbase/rtl8188eus/8188eu.mod.o /home/rtkbase/rtkbase/rtl8188eus/.module-common.o

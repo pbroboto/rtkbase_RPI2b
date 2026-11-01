@@ -1,0 +1,1 @@
+rtkbase ALL=(ALL) NOPASSWD: /bin/chmod 666 /dev/ttyAMA0

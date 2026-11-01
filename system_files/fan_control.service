@@ -1,0 +1,14 @@
+[Unit]
+Description=RTKBase Fan Control
+After=multi-user.target
+
+[Service]
+Type=simple
+SyslogIdentifier=fan_control
+User=root
+ExecStart=/home/rtkbase/rtkbase/venv/bin/python3 /home/rtkbase/rtkbase/tools/fan_control.py
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

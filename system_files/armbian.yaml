@@ -1,0 +1,14 @@
+network:
+  version: 2
+  renderer: NetworkManager
+  ethernets:
+    eth0:
+      dhcp4: true
+  wifis:
+    wlan_client:
+      dhcp4: true
+      access-points:
+        GNSS-CORSX:
+          auth:
+            key-management: psk
+            password: Ledzeppelin15

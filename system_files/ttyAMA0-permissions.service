@@ -1,0 +1,9 @@
+[Unit]
+Description=Fix ttyAMA0 permissions
+After=dev-ttyAMA0.device
+[Service]
+Type=oneshot
+ExecStart=/bin/chmod 666 /dev/ttyAMA0
+RemainAfterExit=yes
+[Install]
+WantedBy=multi-user.target

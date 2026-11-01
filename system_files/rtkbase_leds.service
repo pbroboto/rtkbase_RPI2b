@@ -1,0 +1,14 @@
+[Unit]
+Description=RTKBase Traffic Light LED Controller
+After=str2str_tcp.service rtkbase_web.service
+Wants=str2str_tcp.service
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/bin/python3 -u /home/rtkbase/rtkbase/tools/rtkbase_leds.py
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

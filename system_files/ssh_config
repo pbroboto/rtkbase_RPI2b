@@ -1,0 +1,19 @@
+Host rpi2b
+    HostName <RPI2B_TAILSCALE_IP>
+    User rtkbase
+    IdentityFile ~/.ssh/rpi2b_key
+
+Host rpi2b-lan
+    HostName <RPI2B_LAN_IP>
+    User rtkbase
+    IdentityFile ~/.ssh/rpi2b_key
+
+Host opz3
+    HostName <OPZ3_TAILSCALE_IP>
+    User rtkbase
+    IdentityFile ~/.ssh/rpi2b_key
+
+Host rpi2b-ap
+    HostName 10.0.0.1
+    User rtkbase
+    IdentityFile ~/.ssh/rpi2b_key

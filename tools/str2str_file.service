@@ -1,0 +1,18 @@
+[Unit]
+Description=RTKBase File
+Requires=str2str_tcp.service
+After=str2str_tcp.service
+[Service]
+Type=simple
+SyslogIdentifier=str2str_file
+User=rtkbase
+ExecStart=/home/rtkbase/rtkbase/run_cast.sh in_tcp out_file
+Restart=on-failure
+RestartSec=30
+LogRateLimitIntervalSec=1 minute
+LogRateLimitBurst=1
+ProtectHome=read-only
+ProtectSystem=strict
+ReadWritePaths=/home/rtkbase/rtkbase /mnt/rtkdata
+[Install]
+WantedBy=multi-user.target

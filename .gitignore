@@ -1,0 +1,18 @@
+*.pyc
+*~
+rtkrcv.nav
+.vscode/*
+/logs/*
+settings.conf
+/data/*
+/log/*
+test.sh
+test.conf
+*.FCStd1
+**/venv*/*
+**/build/
+# secrets - never commit
+system_files/rpi2b_key*
+settings.conf
+settings.conf.broken*
+*.pem

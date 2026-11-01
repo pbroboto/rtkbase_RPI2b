@@ -1,0 +1,20 @@
+[Unit]
+Description=RTKBase Tcp
+After=ttyAMA0-permissions.service
+Requires=ttyAMA0-permissions.service
+
+[Service]
+Type=simple
+SyslogIdentifier=str2str_tcp
+User=rtkbase
+Environment=rtkbase_path=/home/rtkbase/rtkbase
+ExecStartPre=/bin/bash -c 'source /etc/environment && cd /home/rtkbase/rtkbase && tools/install.sh --user rtkbase --configure-gnss || true && sed -i "s/tcp_host_addr=.*/tcp_host_addr=\x27\x27/" /home/rtkbase/rtkbase/settings.conf'
+ExecStart=/home/rtkbase/rtkbase/run_cast.sh in_serial out_tcp
+Restart=on-failure
+RestartSec=30
+ProtectHome=read-only
+ProtectSystem=strict
+ReadWritePaths=/home/rtkbase/rtkbase
+
+[Install]
+WantedBy=multi-user.target

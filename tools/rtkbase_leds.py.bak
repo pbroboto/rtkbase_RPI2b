@@ -1,0 +1,277 @@
+#!/usr/bin/env python3
+"""
+RTKBase Traffic Light LED Controller
+=====================================
+Controls a 3-LED traffic light module connected to OPZ3 GPIO pins.
+
+LED Behavior:
+  Red    (GPIO72/PC8  - Pin15): Solid = power OK, Blinking = no GNSS data / error
+  Yellow (GPIO79/PC15 - Pin16): Solid = NTRIP streaming, Blinking = NTRIP down
+  Green  (GPIO78/PC14 - Pin18): Solid = GNSS data healthy, Blinking = no GNSS data
+  GND                 - Pin20
+
+Summary:
+  All solid    = Everything OK
+  Any blinking = Problem, needs attention
+
+Boot sequence:
+  Red solid, Green/Yellow OFF = System starting up (first 10 seconds)
+  Then normal monitoring begins.
+
+Monitors:
+  - str2str_tcp service log: GNSS data health (bps > 5000 from /dev/ttyS1)
+  - str2str_ntrip_A service log: NTRIP caster connection and streaming
+"""
+
+import subprocess
+import time
+import os
+import signal
+import sys
+
+# GPIO pin numbers (Linux GPIO numbers for Allwinner H618)
+RED_GPIO = 72     # PC8  - Pin 15
+YELLOW_GPIO = 79  # PC15 - Pin 16
+GREEN_GPIO = 78   # PC14 - Pin 18
+
+GPIO_PATH = "/sys/class/gpio"
+
+# Status check interval (seconds)
+CHECK_INTERVAL = 5
+
+# Blink timing
+BLINK_ON = 0.5
+BLINK_OFF = 0.5
+
+# Boot delay (seconds) - Red solid while services initialize
+BOOT_DELAY = 10
+
+
+def gpio_export(pin):
+    """Export a GPIO pin if not already exported."""
+    if not os.path.exists(f"{GPIO_PATH}/gpio{pin}"):
+        try:
+            with open(f"{GPIO_PATH}/export", "w") as f:
+                f.write(str(pin))
+            time.sleep(0.1)
+        except IOError as e:
+            print(f"Error exporting GPIO {pin}: {e}")
+            return False
+    return True
+
+
+def gpio_unexport(pin):
+    """Unexport a GPIO pin."""
+    if os.path.exists(f"{GPIO_PATH}/gpio{pin}"):
+        try:
+            with open(f"{GPIO_PATH}/unexport", "w") as f:
+                f.write(str(pin))
+        except IOError:
+            pass
+
+
+def gpio_set_direction(pin, direction="out"):
+    """Set GPIO pin direction."""
+    try:
+        with open(f"{GPIO_PATH}/gpio{pin}/direction", "w") as f:
+            f.write(direction)
+        return True
+    except IOError as e:
+        print(f"Error setting direction for GPIO {pin}: {e}")
+        return False
+
+
+def gpio_write(pin, value):
+    """Write value (0 or 1) to GPIO pin."""
+    try:
+        with open(f"{GPIO_PATH}/gpio{pin}/value", "w") as f:
+            f.write(str(value))
+    except IOError:
+        pass
+
+
+def setup_gpio():
+    """Initialize all GPIO pins - all OFF."""
+    pins = [RED_GPIO, YELLOW_GPIO, GREEN_GPIO]
+    for pin in pins:
+        if not gpio_export(pin):
+            return False
+        if not gpio_set_direction(pin, "out"):
+            return False
+        gpio_write(pin, 0)
+    return True
+
+
+def cleanup_gpio():
+    """Turn off all LEDs and unexport GPIO pins."""
+    pins = [RED_GPIO, YELLOW_GPIO, GREEN_GPIO]
+    for pin in pins:
+        gpio_write(pin, 0)
+        gpio_unexport(pin)
+    print("GPIO cleanup done.")
+
+
+def check_gnss_health():
+    """
+    Check if GNSS data is healthy by reading str2str_tcp log.
+    Returns True if data is flowing (bps > 5000).
+    """
+    try:
+        result = subprocess.run(
+            ["journalctl", "-u", "str2str_tcp", "--no-pager", "-n", "3", "--since", "2 min ago"],
+            capture_output=True, text=True, timeout=5
+        )
+        output = result.stdout
+        for line in output.split("\n"):
+            if "bps" in line and "/dev/ttyS" in line:
+                parts = line.split()
+                for i, part in enumerate(parts):
+                    if part == "bps":
+                        try:
+                            bps = int(parts[i - 1])
+                            if bps > 5000:
+                                return True
+                        except (ValueError, IndexError):
+                            pass
+        return False
+    except (subprocess.TimeoutExpired, Exception) as e:
+        print(f"Error checking GNSS health: {e}")
+        return False
+
+
+def check_ntrip_streaming():
+    """
+    Check if NTRIP is actively streaming by reading str2str_ntrip_A log.
+    Returns True if connected and sending data.
+    """
+    try:
+        result = subprocess.run(
+            ["journalctl", "-u", "str2str_ntrip_A", "--no-pager", "-n", "3", "--since", "2 min ago"],
+            capture_output=True, text=True, timeout=5
+        )
+        output = result.stdout
+        for line in output.split("\n"):
+            if "bps" in line and "PBR_RTK_STATION" in line:
+                if "[CC" in line:
+                    parts = line.split()
+                    for i, part in enumerate(parts):
+                        if part == "bps":
+                            try:
+                                bps = int(parts[i - 1])
+                                if bps > 0:
+                                    return True
+                            except (ValueError, IndexError):
+                                pass
+        return False
+    except (subprocess.TimeoutExpired, Exception) as e:
+        print(f"Error checking NTRIP status: {e}")
+        return False
+
+
+def signal_handler(sig, frame):
+    """Handle shutdown signals gracefully."""
+    print("\nShutting down LED controller...")
+    cleanup_gpio()
+    sys.exit(0)
+
+
+def blink_leds(leds_to_blink, leds_solid, cycles):
+    """
+    Blink specified LEDs while keeping others solid.
+    leds_to_blink: list of GPIO pins to blink
+    leds_solid: list of (GPIO pin, value) to keep steady
+    cycles: number of blink cycles
+    """
+    for _ in range(cycles):
+        # Set solid LEDs
+        for pin, val in leds_solid:
+            gpio_write(pin, val)
+        # Blink ON
+        for pin in leds_to_blink:
+            gpio_write(pin, 1)
+        time.sleep(BLINK_ON)
+        # Blink OFF
+        for pin in leds_to_blink:
+            gpio_write(pin, 0)
+        time.sleep(BLINK_OFF)
+
+
+def main():
+    """Main loop for LED traffic light control."""
+    signal.signal(signal.SIGTERM, signal_handler)
+    signal.signal(signal.SIGINT, signal_handler)
+
+    print("RTKBase Traffic Light LED Controller")
+    print("====================================")
+    print(f"Red    = GPIO{RED_GPIO} (Pin 15)")
+    print(f"Yellow = GPIO{YELLOW_GPIO} (Pin 16)")
+    print(f"Green  = GPIO{GREEN_GPIO} (Pin 18)")
+    print(f"GND    = Pin 20")
+    print()
+    print("Solid = OK | Blinking = Problem")
+    print()
+
+    if not setup_gpio():
+        print("Failed to setup GPIO pins. Are you running as root?")
+        sys.exit(1)
+
+    print("GPIO setup complete.")
+
+    # === BOOT STATE: Red solid, Green/Yellow OFF ===
+    print(f"Boot state: Red ON, waiting {BOOT_DELAY}s for services to initialize...")
+    gpio_write(RED_GPIO, 1)
+    gpio_write(YELLOW_GPIO, 0)
+    gpio_write(GREEN_GPIO, 0)
+    time.sleep(BOOT_DELAY)
+
+    print("Starting monitoring...")
+    print()
+
+    try:
+        while True:
+            gnss_ok = check_gnss_health()
+            ntrip_ok = check_ntrip_streaming()
+
+            status = f"GNSS: {'OK' if gnss_ok else 'NO DATA'} | NTRIP: {'STREAMING' if ntrip_ok else 'OFF'}"
+            print(f"[{time.strftime('%H:%M:%S')}] {status}")
+
+            if gnss_ok and ntrip_ok:
+                # All healthy - all solid
+                gpio_write(RED_GPIO, 1)
+                gpio_write(YELLOW_GPIO, 1)
+                gpio_write(GREEN_GPIO, 1)
+                time.sleep(CHECK_INTERVAL)
+
+            elif gnss_ok and not ntrip_ok:
+                # GNSS OK but NTRIP down - yellow blinks
+                gpio_write(GREEN_GPIO, 1)
+                blink_leds(
+                    leds_to_blink=[YELLOW_GPIO],
+                    leds_solid=[(RED_GPIO, 1), (GREEN_GPIO, 1)],
+                    cycles=int(CHECK_INTERVAL / (BLINK_ON + BLINK_OFF))
+                )
+
+            elif not gnss_ok and ntrip_ok:
+                # No GNSS but NTRIP connected - red and green blink
+                blink_leds(
+                    leds_to_blink=[RED_GPIO, GREEN_GPIO],
+                    leds_solid=[(YELLOW_GPIO, 1)],
+                    cycles=int(CHECK_INTERVAL / (BLINK_ON + BLINK_OFF))
+                )
+
+            else:
+                # Both down - all blink
+                blink_leds(
+                    leds_to_blink=[RED_GPIO, YELLOW_GPIO, GREEN_GPIO],
+                    leds_solid=[],
+                    cycles=int(CHECK_INTERVAL / (BLINK_ON + BLINK_OFF))
+                )
+
+    except KeyboardInterrupt:
+        pass
+    finally:
+        cleanup_gpio()
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,1 @@
+savedcmd_/home/rtkbase/rtkbase/rtl8188eus/Module.symvers :=  scripts/mod/modpost -M -m -a      -o /home/rtkbase/rtkbase/rtl8188eus/Module.symvers -T /home/rtkbase/rtkbase/rtl8188eus/modules.order -i Module.symvers -e 

@@ -1,0 +1,1 @@
+savedcmd_/home/rtkbase/rtkbase/rtl8188eus/8188eu.o := arm-linux-gnueabihf-ld -EL -z noexecstack --no-warn-rwx-segments --strip-debug  -r -o /home/rtkbase/rtkbase/rtl8188eus/8188eu.o @/home/rtkbase/rtkbase/rtl8188eus/8188eu.mod 

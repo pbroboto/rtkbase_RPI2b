@@ -1,0 +1,12 @@
+[Unit]
+Description=RTKBase Archive
+[Service]
+Type=simple
+SyslogIdentifier=rtkbase_archive
+User=rtkbase
+ExecStart=/home/rtkbase/rtkbase/archive_and_clean.sh
+ProtectHome=read-only
+ProtectSystem=strict
+ReadWritePaths=/home/rtkbase/rtkbase
+[Install]
+WantedBy=multi-user.target
